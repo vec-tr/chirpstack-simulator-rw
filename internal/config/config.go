@@ -39,28 +39,7 @@ type Config struct {
 		} `mapstructure:"gateway"`
 	} `mapstructure:"chirpstack"`
 
-	Simulator []struct {
-		TenantID       string        `mapstructure:"tenant_id"`
-		Duration       time.Duration `mapstructure:"duration"`
-		ActivationTime time.Duration `mapstructure:"activation_time"`
-
-		Device struct {
-			Count           int           `mapstructure:"count"`
-			UplinkInterval  time.Duration `mapstructure:"uplink_interval"`
-			FPort           uint8         `mapstructure:"f_port"`
-			Payload         string        `mapstructure:"payload"`
-			Frequency       int           `mapstructure:"frequency"`
-			Bandwidth       int           `mapstructure:"bandwidth"`
-			SpreadingFactor int           `mapstructure:"spreading_factor"`
-		} `mapstructure:"device"`
-
-		Gateway struct {
-			MinCount             int    `mapstructure:"min_count"`
-			MaxCount             int    `mapstructure:"max_count"`
-			EventTopicTemplate   string `mapstructure:"event_topic_template"`
-			CommandTopicTemplate string `mapstructure:"command_topic_template"`
-		} `mapstructure:"gateway"`
-	} `mapstructure:"simulator"`
+	Simulator []SimulatorConfig `mapstructure:"simulator"`
 
 	Prometheus struct {
 		Bind string `mapstructure:"bind"`
@@ -73,6 +52,36 @@ type DeviceConfig struct {
 	UplinkInterval time.Duration `mapstructure:"uplink_interval"`
 	FPort          uint8         `mapstructure:"f_port"`
 	Payload        string        `mapstructure:"payload"`
+}
+
+type ApplicationConfig struct {
+	Name string `mapstructure:"name"`
+}
+
+type SimulatorConfig struct {
+	TenantID       string        `mapstructure:"tenant_id"`
+	Duration       time.Duration `mapstructure:"duration"`
+	ActivationTime time.Duration `mapstructure:"activation_time"`
+
+	Device struct {
+		Count           int           `mapstructure:"count"`
+		UplinkInterval  time.Duration `mapstructure:"uplink_interval"`
+		FPort           uint8         `mapstructure:"f_port"`
+		Payload         string        `mapstructure:"payload"`
+		Frequency       int           `mapstructure:"frequency"`
+		Bandwidth       int           `mapstructure:"bandwidth"`
+		SpreadingFactor int           `mapstructure:"spreading_factor"`
+		DevEUIs         []string      `mapstructure:"dev_euis"` // Add this field
+	} `mapstructure:"device"`
+
+	Gateway struct {
+		MinCount int `mapstructure:"min_count"`
+		MaxCount int `mapstructure:"max_count"`
+		EventTopicTemplate   string `mapstructure:"event_topic_template"`
+			CommandTopicTemplate string `mapstructure:"command_topic_template"`
+	} `mapstructure:"gateway"`
+
+	Applications []ApplicationConfig `mapstructure:"applications"`
 }
 
 // C holds the global configuration.

@@ -29,14 +29,14 @@ import (
 
 // Start starts the simulator.
 func Start(ctx context.Context, wg *sync.WaitGroup, c config.Config) error {
-	for i, c := range c.Simulator {
+	for i, simConfig := range c.Simulator {
 		log.WithFields(log.Fields{
 			"i": i,
 		}).Info("simulator: starting simulation")
 
 		wg.Add(1)
 
-		pl, err := hex.DecodeString(c.Device.Payload)
+		pl, err := hex.DecodeString(simConfig.Device.Payload)
 		if err != nil {
 			return errors.Wrap(err, "decode payload error")
 		}
@@ -44,24 +44,24 @@ func Start(ctx context.Context, wg *sync.WaitGroup, c config.Config) error {
 		sim := simulation{
 			ctx:                  ctx,
 			wg:                   wg,
-			tenantID:             c.TenantID,
-			deviceCount:          c.Device.Count,
-			activationTime:       c.ActivationTime,
-			uplinkInterval:       c.Device.UplinkInterval,
-			fPort:                c.Device.FPort,
+			tenantID:             simConfig.TenantID,
+			deviceCount:          simConfig.Device.Count,
+			activationTime:       simConfig.ActivationTime,
+			uplinkInterval:       simConfig.Device.UplinkInterval,
+			fPort:                simConfig.Device.FPort,
 			payload:              pl,
-			frequency:            c.Device.Frequency,
-			bandwidth:            c.Device.Bandwidth,
-			spreadingFactor:      c.Device.SpreadingFactor,
-			duration:             c.Duration,
-			gatewayMinCount:      c.Gateway.MinCount,
-			gatewayMaxCount:      c.Gateway.MaxCount,
+			frequency:            simConfig.Device.Frequency,
+			bandwidth:            simConfig.Device.Bandwidth,
+			spreadingFactor:      simConfig.Device.SpreadingFactor,
+			duration:             simConfig.Duration,
+			gatewayMinCount:      simConfig.Gateway.MinCount,
+			gatewayMaxCount:      simConfig.Gateway.MaxCount,
 			deviceAppKeys:        make(map[lorawan.EUI64]lorawan.AES128Key),
-			eventTopicTemplate:   c.Gateway.EventTopicTemplate,
-			commandTopicTemplate: c.Gateway.CommandTopicTemplate,
+			eventTopicTemplate:   simConfig.Gateway.EventTopicTemplate,
+			commandTopicTemplate: simConfig.Gateway.CommandTopicTemplate,
 		}
 
-		go sim.start()
+		go sim.start(c)
 	}
 
 	return nil
@@ -94,8 +94,8 @@ type simulation struct {
 	commandTopicTemplate string
 }
 
-func (s *simulation) start() {
-	if err := s.init(); err != nil {
+func (s *simulation) start(config config.Config) {
+	if err := s.init(config); err != nil {
 		log.WithError(err).Error("simulator: init simulation error")
 	}
 
@@ -114,7 +114,7 @@ func (s *simulation) start() {
 	log.Info("simulation: tear-down completed")
 }
 
-func (s *simulation) init() error {
+func (s *simulation) init(config config.Config) error {
 	log.Info("simulation: setting up")
 
 	if err := s.setupTenant(); err != nil {
@@ -129,11 +129,14 @@ func (s *simulation) init() error {
 		return err
 	}
 
-	if err := s.setupApplication(); err != nil {
-		return err
-	}
+	// Pull applications from the configuration and set them up
+    for _, app := range config.Simulator[0].Applications { // Assuming the first simulator config
+        if err := s.setupApplication(app.Name, "rw-01"); err != nil {
+            return err
+        }
+    }
 
-	if err := s.setupDevices(); err != nil {
+	if err := s.setupDevices(config.Simulator[0]); err != nil {
 		return err
 	}
 
@@ -277,10 +280,13 @@ func (s *simulation) setupGateways() error {
 			return errors.Wrap(err, "read random bytes error")
 		}
 
+		// Assign a meaningful name to the device
+		gatewayName := "rw-gw-01"
+
 		_, err := as.Gateway().Create(context.Background(), &api.CreateGatewayRequest{
 			Gateway: &api.Gateway{
 				GatewayId:   gatewayID.String(),
-				Name:        gatewayID.String(),
+				Name:        gatewayName,
 				Description: gatewayID.String(),
 				TenantId:    s.tenant.GetId(),
 				Location:    &common.Location{},
@@ -353,18 +359,14 @@ func (s *simulation) tearDownDeviceProfile() error {
 	return nil
 }
 
-func (s *simulation) setupApplication() error {
-	log.Info("simulator: init application")
+func (s *simulation) setupApplication(appName string, applicationID string) error {
+    log.WithField("app_name", appName).Info("simulator: creating application")
 
-	appName, err := uuid.NewV4()
-	if err != nil {
-		return err
-	}
 
 	createAppResp, err := as.Application().Create(context.Background(), &api.CreateApplicationRequest{
 		Application: &api.Application{
-			Name:        appName.String(),
-			Description: appName.String(),
+			Name:        appName,
+			Description: appName,
 			TenantId:    s.tenant.GetId(),
 		},
 	})
@@ -373,6 +375,7 @@ func (s *simulation) setupApplication() error {
 	}
 
 	s.applicationID = createAppResp.Id
+	fmt.Printf("Created application with ID: %s\n", s.applicationID)
 	return nil
 }
 
@@ -388,62 +391,76 @@ func (s *simulation) tearDownApplication() error {
 	return nil
 }
 
-func (s *simulation) setupDevices() error {
-	log.Info("simulator: init devices")
+func (s *simulation) setupDevices(config config.SimulatorConfig) error {
+    log.Info("simulator: init devices")
 
-	var wg sync.WaitGroup
-
-	for i := 0; i < s.deviceCount; i++ {
-		wg.Add(1)
-
-		go func() {
-			var devEUI lorawan.EUI64
-			var appKey lorawan.AES128Key
-
-			if _, err := rand.Read(devEUI[:]); err != nil {
-				log.Fatal(err)
-			}
-			if _, err := rand.Read(appKey[:]); err != nil {
-				log.Fatal(err)
-			}
-
-			_, err := as.Device().Create(context.Background(), &api.CreateDeviceRequest{
-				Device: &api.Device{
-					DevEui:          devEUI.String(),
-					Name:            devEUI.String(),
-					Description:     devEUI.String(),
-					ApplicationId:   s.applicationID,
-					DeviceProfileId: s.deviceProfileID.String(),
-				},
-			})
-			if err != nil {
-				log.Fatal("create device error, error: %s", err)
-			}
-
-			_, err = as.Device().CreateKeys(context.Background(), &api.CreateDeviceKeysRequest{
-				DeviceKeys: &api.DeviceKeys{
-					DevEui: devEUI.String(),
-
-					// yes, this is correct for LoRaWAN 1.0.x!
-					// see the API documentation
-					NwkKey: appKey.String(),
-				},
-			})
-			if err != nil {
-				log.Fatal("create device keys error, error: %s", err)
-			}
-
-			s.deviceAppKeysMutex.Lock()
-			s.deviceAppKeys[devEUI] = appKey
-			s.deviceAppKeysMutex.Unlock()
-			wg.Done()
-		}()
-
+	if len(config.Device.DevEUIs) < config.Device.Count {
+		return errors.New("not enough DevEUIs provided")
 	}
+    var wg sync.WaitGroup
 
-	wg.Wait()
+    for i := 0; i < s.deviceCount; i++ {
+        wg.Add(1)
 
-	return nil
+        go func(deviceIndex int) {
+            defer wg.Done()
+
+            // Generate a random DevEUI
+            // var devEUI lorawan.EUI64
+            // if _, err := rand.Read(devEUI[:]); err != nil {
+            //     log.Fatal(err)
+            // }
+
+			// Parse the DevEUI from the configuration
+            var devEUI lorawan.EUI64
+            if err := devEUI.UnmarshalText([]byte(config.Device.DevEUIs[deviceIndex])); err != nil {
+                log.Fatalf("invalid DevEUI: %s", err)
+            }
+
+            // Generate a random AppKey
+            var appKey lorawan.AES128Key
+            if _, err := rand.Read(appKey[:]); err != nil {
+                log.Fatal(err)
+            }
+
+            // Assign a meaningful name to the device
+            deviceName := fmt.Sprintf("rw-dev-%d", deviceIndex+1)
+
+            // Create the device
+            _, err := as.Device().Create(context.Background(), &api.CreateDeviceRequest{
+                Device: &api.Device{
+                    DevEui:          devEUI.String(),
+                    Name:            deviceName,
+                    Description:     fmt.Sprintf("Device %d for simulation", deviceIndex+1),
+                    ApplicationId:   s.applicationID,
+                    DeviceProfileId: s.deviceProfileID.String(),
+                },
+            })
+            if err != nil {
+                log.Fatalf("create device error: %s", err)
+            }
+
+            // Create the device keys
+            _, err = as.Device().CreateKeys(context.Background(), &api.CreateDeviceKeysRequest{
+                DeviceKeys: &api.DeviceKeys{
+                    DevEui: devEUI.String(),
+                    NwkKey: appKey.String(),
+                },
+            })
+            if err != nil {
+                log.Fatalf("create device keys error: %s", err)
+            }
+
+            // Store the AppKey for the device
+            s.deviceAppKeysMutex.Lock()
+            s.deviceAppKeys[devEUI] = appKey
+            s.deviceAppKeysMutex.Unlock()
+        }(i)
+    }
+
+    wg.Wait()
+
+    return nil
 }
 
 func (s *simulation) tearDownDevices() error {
